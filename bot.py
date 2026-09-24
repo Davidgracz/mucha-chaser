@@ -40,16 +40,39 @@ def find_mucha_channel(guild: discord.Guild):
 
 
 async def disconnect_from_voice(guild: discord.Guild):
-    voice = guild.voice_client
+    # Używamy tej samej blokady co connect/move, żeby końcowe
+    # rozłączenie nie ścigało się z niedokończonym follow_mucha().
+    async with get_lock(guild.id):
+        voice = guild.voice_client
 
-    if voice and voice.is_connected():
-        try:
-            await voice.disconnect(force=True)
-        except Exception as exc:
-            print(
-                f"[{guild.name}] Błąd rozłączania: "
-                f"{type(exc).__name__}: {exc}"
-            )
+        if voice is not None:
+            try:
+                # Rozłączamy również wtedy, gdy VoiceClient jest jeszcze
+                # w stanie connecting i is_connected() zwraca False.
+                await voice.disconnect(force=True)
+            except Exception as exc:
+                print(
+                    f"[{guild.name}] Błąd VoiceClient.disconnect: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+        # Fallback: jeśli Discord nadal pokazuje naszego bota na voice,
+        # wymuszamy opuszczenie kanału bezpośrednio przez gateway.
+        await asyncio.sleep(0.25)
+
+        me = guild.me
+        if me and me.voice and me.voice.channel is not None:
+            try:
+                print(
+                    f"[{guild.name}] Fallback disconnect "
+                    f"z kanału: {me.voice.channel.name}"
+                )
+                await guild.change_voice_state(channel=None)
+            except Exception as exc:
+                print(
+                    f"[{guild.name}] Błąd fallback disconnect: "
+                    f"{type(exc).__name__}: {exc}"
+                )
 
 
 async def follow_mucha(guild: discord.Guild):

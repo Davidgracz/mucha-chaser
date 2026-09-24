@@ -8,8 +8,8 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 MUCHA_BOT_ID = int(os.getenv("MUCHA_BOT_ID", "0"))
 
-# Start nowej rundy co 5 minut.
-CHASE_INTERVAL = int(os.getenv("CHASE_INTERVAL", "300"))
+# Start nowej rundy co 10 minut.
+CHASE_INTERVAL = int(os.getenv("CHASE_INTERVAL", "600"))
 
 # Jedna runda pościgu trwa 30 sekund.
 CHASE_DURATION = int(os.getenv("CHASE_DURATION", "30"))
@@ -166,7 +166,7 @@ async def chase_loop(guild: discord.Guild):
             active_chases[guild.id] = False
             await disconnect_from_voice(guild)
 
-        # Kolejna runda startuje 5 minut od początku poprzedniej.
+        # Kolejna runda startuje 10 minut od początku poprzedniej.
         pause = max(0, CHASE_INTERVAL - CHASE_DURATION)
         print(f"[{guild.name}] Następna runda za {pause} s.")
         await asyncio.sleep(pause)

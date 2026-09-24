@@ -1,5 +1,9 @@
 import os
 import asyncio
+import json
+import time
+from pathlib import Path
+
 import discord
 from dotenv import load_dotenv
 
@@ -16,6 +20,44 @@ CHASE_DURATION = int(os.getenv("CHASE_DURATION", "30"))
 
 # Małe opóźnienie przy przeskakiwaniu między kanałami.
 CHASE_DELAY = float(os.getenv("CHASE_DELAY", "0.5"))
+STATUS_FILE = Path(os.getenv("STATUS_FILE", "state/chaser_status.json"))
+
+status_data = {
+    "online": False,
+    "started_at": time.time(),
+    "updated_at": time.time(),
+    "interval_seconds": CHASE_INTERVAL,
+    "duration_seconds": CHASE_DURATION,
+    "delay_seconds": CHASE_DELAY,
+    "bot": None,
+    "guilds": {},
+}
+
+
+def update_status(guild: discord.Guild | None = None, **fields):
+    if guild is None:
+        status_data.update(fields)
+    else:
+        guild_state = status_data["guilds"].setdefault(
+            str(guild.id),
+            {"id": guild.id, "name": guild.name},
+        )
+        guild_state["name"] = guild.name
+        guild_state.update(fields)
+
+    status_data["updated_at"] = time.time()
+
+    try:
+        STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATUS_FILE.with_suffix(STATUS_FILE.suffix + ".tmp")
+        tmp.write_text(
+            json.dumps(status_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        tmp.replace(STATUS_FILE)
+    except OSError as exc:
+        print(f"Nie mogę zapisać statusu Chasera: {exc}")
+
 
 intents = discord.Intents.default()
 intents.voice_states = True
@@ -98,6 +140,13 @@ async def follow_mucha(guild: discord.Guild):
                     "-> czekam na nią w tej rundzie."
                 )
                 await voice.disconnect(force=True)
+                update_status(
+                    guild,
+                    current_voice_channel=None,
+                    current_voice_channel_id=None,
+                    last_event="Mucha wyszła z voice",
+                    last_event_at=time.time(),
+                )
             return
 
         try:
@@ -108,6 +157,13 @@ async def follow_mucha(guild: discord.Guild):
                         f"{target_channel.name} -> gonię!"
                     )
                     await voice.move_to(target_channel)
+                    update_status(
+                        guild,
+                        current_voice_channel=target_channel.name,
+                        current_voice_channel_id=target_channel.id,
+                        last_event="podążam za Muchą",
+                        last_event_at=time.time(),
+                    )
             else:
                 print(
                     f"[{guild.name}] Mucha jest na: "
@@ -117,6 +173,13 @@ async def follow_mucha(guild: discord.Guild):
                     timeout=20.0,
                     reconnect=True,
                     self_deaf=True,
+                )
+                update_status(
+                    guild,
+                    current_voice_channel=target_channel.name,
+                    current_voice_channel_id=target_channel.id,
+                    last_event="wchodzę za Muchą",
+                    last_event_at=time.time(),
                 )
 
         except discord.Forbidden:
@@ -141,6 +204,17 @@ async def chase_round(guild: discord.Guild):
         f"({CHASE_DURATION}s) ==="
     )
     active_chases[guild.id] = True
+    round_started_at = time.time()
+    update_status(
+        guild,
+        active_chase=True,
+        state="CHASE",
+        round_started_at=round_started_at,
+        round_ends_at=round_started_at + CHASE_DURATION,
+        next_round_at=round_started_at + CHASE_INTERVAL,
+        last_event="start rundy pościgu",
+        last_event_at=round_started_at,
+    )
 
     try:
         await follow_mucha(guild)
@@ -148,6 +222,15 @@ async def chase_round(guild: discord.Guild):
     finally:
         active_chases[guild.id] = False
         await disconnect_from_voice(guild)
+        update_status(
+            guild,
+            active_chase=False,
+            state="WAITING",
+            current_voice_channel=None,
+            current_voice_channel_id=None,
+            last_event="koniec rundy pościgu",
+            last_event_at=time.time(),
+        )
         print(
             f"[{guild.name}] === KONIEC rundy "
             "-> wychodzę z voice ==="
@@ -156,6 +239,7 @@ async def chase_round(guild: discord.Guild):
 
 async def chase_loop(guild: discord.Guild):
     while not client.is_closed():
+        round_started_at = time.time()
         try:
             await chase_round(guild)
         except Exception as exc:
@@ -167,8 +251,14 @@ async def chase_loop(guild: discord.Guild):
             await disconnect_from_voice(guild)
 
         # Kolejna runda startuje 10 minut od początku poprzedniej.
-        pause = max(0, CHASE_INTERVAL - CHASE_DURATION)
-        print(f"[{guild.name}] Następna runda za {pause} s.")
+        next_round_at = round_started_at + CHASE_INTERVAL
+        pause = max(0.0, next_round_at - time.time())
+        update_status(
+            guild,
+            next_round_at=next_round_at,
+            state="WAITING",
+        )
+        print(f"[{guild.name}] Następna runda za {pause:.1f} s.")
         await asyncio.sleep(pause)
 
 
@@ -183,6 +273,19 @@ async def on_ready():
         f"start co: {CHASE_INTERVAL}s"
     )
     print("=" * 60)
+    update_status(
+        online=True,
+        bot={
+            "id": client.user.id,
+            "name": str(client.user),
+        },
+    )
+    for guild in client.guilds:
+        update_status(
+            guild,
+            active_chase=active_chases.get(guild.id, False),
+            state="CHASE" if active_chases.get(guild.id, False) else "WAITING",
+        )
 
     # on_ready może odpalić się ponownie po reconnect.
     if getattr(client, "_chase_loops_started", False):

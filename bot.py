@@ -20,7 +20,12 @@ CHASE_DURATION = int(os.getenv("CHASE_DURATION", "30"))
 
 # Małe opóźnienie przy przeskakiwaniu między kanałami.
 CHASE_DELAY = float(os.getenv("CHASE_DELAY", "0.5"))
-STATUS_FILE = Path(os.getenv("STATUS_FILE", "state/chaser_status.json"))
+STATUS_FILE = Path(
+    os.getenv(
+        "STATUS_FILE",
+        str(Path(__file__).resolve().parent / "state" / "chaser_status.json"),
+    )
+)
 
 status_data = {
     "online": False,
